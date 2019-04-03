@@ -1,9 +1,10 @@
+use std::rc::Rc;
 use super::ast;
 
 #[derive(Debug)]
 pub enum MachineTerm {
-    TopRestriction (String, Box<MachineTerm>),
-    SummList (Box<Vec<Box<ast::Summ>>>)
+    TopRestriction (String, Rc<MachineTerm>),
+    SummList (Rc<Vec<Rc<ast::Summ>>>)
 }
 
 

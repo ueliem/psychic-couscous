@@ -1,3 +1,9 @@
+use rand;
+use rand::distributions::Distribution;
+use std::rc::Rc;
+use std::borrow::Borrow;
+
+use super::syntax;
 use super::ast;
 use super::ast::Substitutable;
 use super::machineterm;
@@ -23,65 +29,98 @@ impl SymbolGenerator {
 pub struct Simulator {
     time : f64,
     symgen : SymbolGenerator,
+    rngdist : rand::distributions::Uniform<f64>,
+    rng : rand::rngs::ThreadRng,
     s : store::Store,
-    mt : Box<machineterm::MachineTerm>
+    mt : Rc<machineterm::MachineTerm>
 }
 
 impl Simulator {
     pub fn new() -> Simulator {
         Simulator {
             time: 0.0, 
+            symgen : SymbolGenerator::new(),
+            rngdist : rand::distributions::Uniform::new(0.0, 1.0),
+            rng : rand::thread_rng(),
             s: store::Store::new(), 
-            mt : box machineterm::MachineTerm::SummList(box Vec::new()),
-            symgen : SymbolGenerator::new()
+            mt : Rc::new(machineterm::MachineTerm::SummList(Rc::new(Vec::new())))
         }
     }
-    fn construct (&mut self, proc : &ast::Process, term : Box<machineterm::MachineTerm>) -> Box<machineterm::MachineTerm> {
-        match term {
-            box machineterm::MachineTerm::TopRestriction (c, mt) => 
-                box machineterm::MachineTerm::TopRestriction (c.clone(), self.construct (proc, mt)),
-            box machineterm::MachineTerm::SummList (box mut sl) => {
+    fn construct (&mut self, proc : &ast::Process, term : Rc<machineterm::MachineTerm>) -> Rc<machineterm::MachineTerm> {
+        let e = &*term;
+        match e {
+            machineterm::MachineTerm::TopRestriction (c, mt) => 
+                Rc::new(machineterm::MachineTerm::TopRestriction (c.clone(), self.construct (proc, mt.clone()))),
+            machineterm::MachineTerm::SummList (sl) => {
                 match proc {
                     ast::Process::Restriction (ref c, ref p) => {
                         let fresh = self.symgen.next();
-                        return box machineterm::MachineTerm::TopRestriction 
+                        return Rc::new(machineterm::MachineTerm::TopRestriction 
                             (fresh.clone(),
-                             self.construct(&mut p.substitute(&c, &fresh), box machineterm::MachineTerm::SummList (box sl)));
+                             self.construct(&mut p.substitute(&c, &fresh), Rc::new(machineterm::MachineTerm::SummList (sl.clone())))));
                     },
-                    ast::Process::Parallel (box p1, box p2) => {
-                        let mt1 = self.construct (p2, box machineterm::MachineTerm::SummList (box sl));
+                    ast::Process::Parallel (p1, p2) => {
+                        let mt1 = self.construct (p2, Rc::new(machineterm::MachineTerm::SummList (sl.clone())));
                         return self.construct (p1, mt1);
                     },
-                    ast::Process::Summation (box apvec) => {
-                        // sl.push((**apvec).clone());
-                        // sl.append(&mut vec![apvec.clone()]);
-                        // let mut v = vec![apvec];
-                        // # v.append(&mut sl);
-                        sl.append(&mut vec![box apvec.clone()]);
-                        return box machineterm::MachineTerm::SummList (box sl);
+                    ast::Process::Summation (apvec) => {
+                        let mut v = vec![apvec.clone()];
+                        v.extend_from_slice(sl);
+                        return Rc::new(machineterm::MachineTerm::SummList (Rc::new(v)));
                     },
                     ast::Process::Replication (a, p) => {
                         self.construct (
                             &mut ast::Process::Summation (
-                                box vec![(a.clone(), box ast::Process::Parallel ((*p).clone(), box proc.clone()))]), 
-                            box machineterm::MachineTerm::SummList (box sl))
+                                Rc::new(vec![(a.clone(), Rc::new(ast::Process::Parallel ((*p).clone(), Rc::new(proc.clone()))))])),
+                            Rc::new(machineterm::MachineTerm::SummList (sl.clone())))
                     },
-                    ast::Process::Termination => box machineterm::MachineTerm::SummList (box sl)
+                    ast::Process::Termination => Rc::new(machineterm::MachineTerm::SummList (sl.clone()))
                 }
             }
         }
     }
-    pub fn load(&mut self, p : &ast::Process) {
-        let mtc = self.construct(&mut p.clone(), box machineterm::MachineTerm::SummList(box Vec::new()));
-        self.mt = mtc;
+    pub fn load(&mut self, p : &syntax::Program) {
+        match *p {
+            syntax::Program::Prog(ref dl) => {
+                let mut toplevelproc = Vec::new();
+                for d in dl.iter() {
+                    println!("{:?}", d);
+                    match (*d).borrow() {
+                        syntax::Declaration::NewChannel (ref c, r) => self.s.add_channel(c, *r),
+                        syntax::Declaration::Run (p) => toplevelproc.push(p)
+                    }
+                }
+                self.mt = toplevelproc.iter().rev().fold(Rc::new(machineterm::MachineTerm::SummList(Rc::new(Vec::new()))), |acc, x| {
+                    let p : &syntax::Process = (**x).borrow();
+                    self.construct(&ast::Process::from(p), acc)
+                });
+            }
+        }
+    }
+    fn gillespie(&mut self) -> (String, f64) {
+        let activities = self.s.activities();
+        let a0 = activities.iter().fold(0.0, |acc, (v, a)| acc + a);
+        let n1 = self.rngdist.sample(&mut self.rng);
+        let n2 = self.rngdist.sample(&mut self.rng);
+        let tau = (1.0 / a0) * (1.0 / n1).ln();
+
+        for i in 1..activities.len() {
+            // let lowerbnd = 
+            // let upperbnd = 
+            println!("{:?} {:?}", activities[i].0, activities[i].1);
+        }
+
+        return ("".to_string(), tau);
     }
     pub fn reduce(&mut self) {
-        self.mt = match self.mt {
-            box machineterm::MachineTerm::TopRestriction(c, box t) => {
-                self.s.add_channel(c.clone());
-                box t
+        let e = &*self.mt;
+        match e {
+            machineterm::MachineTerm::TopRestriction(c, t) => {
+                self.s.add_channel(c, 0.0);
+                self.mt = t.clone();
             },
-            box machineterm::MachineTerm::SummList (ref sl) => {
+            machineterm::MachineTerm::SummList (sl) => {
+                self.gillespie();
                 panic!();
             }
         }

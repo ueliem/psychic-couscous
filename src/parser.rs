@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use combine::{attempt, Stream, Parser, parser, token, skip_many1, many1, many, choice, between};
+use combine::{attempt, Stream, Parser, parser, skip_many1, many1, many, choice, between, not_followed_by};
 use combine::error::{Consumed, ParseError};
 use combine::char::{string, space, alpha_num, letter, digit};
 use combine::parser::combinator::recognize;
@@ -42,6 +42,24 @@ where
          })
 }
 
+fn integer<I>() -> impl Parser<Input = I, Output = usize>
+where
+    I: Stream<Item = char>,
+    I: combine::RangeStreamOnce,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    <I as combine::StreamOnce>::Range: combine::stream::Range,
+    <I as combine::StreamOnce>::Range : std::string::ToString,
+{
+    recognize(skip_many1(digit()).skip(not_followed_by(lex_char('.'))))
+        .skip(white_space())
+        .map(|f : Vec<char>| {
+             let s : String = f.into_iter().collect();
+             let t : &str = s.as_str();
+             let u = t.parse::<usize>();
+             u.unwrap()
+         })
+}
+
 parser! {
 fn reserved[I]()(I) -> &'static str
 where [I: Stream<Item = char>]
@@ -69,7 +87,9 @@ where [I: Stream<Item = char>]
 
 parser! {
 fn identifier[I]()(I) -> String
-where [I: Stream<Item = char>]
+where [I: Stream<Item = char>,
+      I::Error: ParseError<I::Item, I::Range, I::Position>,
+      I: combine::RangeStreamOnce]
 {
     combine::parser::function::parser(|input : &mut I| {
         let position = input.position();
@@ -96,14 +116,14 @@ where [I: Stream<Item = char>]
 
 parser! {
 fn action[I]()(I) -> syntax::Act
-where [I: Stream<Item = char>]
+where [I: Stream<Item = char>,
+      I: combine::RangeStreamOnce]
 {
     let qmark = lex_char('?');
     let expmark = lex_char('!');
-    // let dot = lex_char('.');
 
-    let act_rec = (identifier(), qmark, identifier()).map(|a| syntax::Act::Input (a.0, a.2));
-    let act_send = (identifier(), expmark, identifier()).map(|a| syntax::Act::Output (a.0, a.2));
+    let act_rec = (qmark, identifier(), lex_char(';')).map(|a| syntax::Act::Input (a.1));
+    let act_send = (expmark, identifier(), lex_char(';')).map(|a| syntax::Act::Output (a.1));
     act_rec.or(act_send)
 }
 }
@@ -115,7 +135,7 @@ where [I: Stream<Item = char>,
       I: combine::RangeStreamOnce,
       <I as combine::StreamOnce>::Range: combine::stream::Range]
 {
-    action().and(between(token('{'), token('}'), process()))
+    action().and(process())
 }
 }
 
@@ -137,9 +157,17 @@ fn process_<I>() -> impl Parser<Input = I, Output = syntax::Process>
     let choose = keyword("do")
         .with(ap().and(many1(keyword("or").with(ap()).map(|(a, p)| (a, Rc::new(p))))))
         .map(|((a, p1), plist)| syntax::Process::Choice (Rc::new(prepend((a, Rc::new(p1)), plist))));
+    let inst = identifier()
+        .skip((lex_char('('), lex_char(')')))
+        .map(|n : String| syntax::Process::Instance (n.to_string()));
+    let repeat = integer()
+        .skip(keyword("of"))
+        .and(process())
+        .map(|(i, p)| syntax::Process::Repitition (i, Rc::new(p)));
     let rep = keyword("replicate")
         .with(action())
-        .and(between(lex_char('{'), lex_char('}'), process()))
+        // .and(between(lex_char('{'), lex_char('}'), process()))
+        .and(process())
         .map(|(a, p)| syntax::Process::Replication (a, Rc::new(p)));
     let terminate = keyword("end").map(|_| syntax::Process::Termination);
     let nesteddecl = between(lex_char('('), lex_char(')'), 
@@ -151,6 +179,8 @@ fn process_<I>() -> impl Parser<Input = I, Output = syntax::Process>
         .or(terminate)
         .or(choose)
         .or(actionproc)
+        .or(inst)
+        .or(repeat)
         .or(rep)
         .or(nesteddecl)
 }
@@ -183,9 +213,15 @@ fn declaration_<I>() -> impl Parser<Input = I, Output = syntax::Declaration>
     let runproc = keyword("run")
         .with(process())
         .map(|p| syntax::Declaration::Run (Rc::new(p)));
+    let def = keyword("let")
+        .with(identifier())
+        .skip(lex_char('='))
+        .and(process())
+        .map(|(i, p)| syntax::Declaration::Def (i, Rc::new(p)));
 
     newchan
         .or(runproc)
+        .or(def)
 }
 
 parser!{
@@ -208,24 +244,9 @@ where [I: Stream<Item = char>,
     ]
 {
     many1(declaration().map(|d : syntax::Declaration| Rc::new(d)))
-        .map(|v : Vec<Rc<syntax::Declaration>>| syntax::Program::Prog (Rc::new(v)))
+        .map(|dec : Vec<Rc<syntax::Declaration>>| {
+            syntax::Program::Prog (Rc::new(dec))
+        })
 }
-}
-
-
-pub fn myparser() {
-    println!("hello");
-    // let dot = lex_char('.');
-
-    // let result = process().easy_parse("this ? that { end }");
-    // let result = process().easy_parse("this ? that {");
-    let _ = println!("{:?}", process().easy_parse("a?b{end}"));
-    // let _ = println!("{:?}", ap().easy_parse("a?end{end}"));
-    let _ = println!("{:?}", process().easy_parse("a?b{(end | end | end)}"));
-    let _ = println!("{:?}", float().easy_parse("3538.0333"));
-    let _ = println!("{:?}", declaration().easy_parse("new c@5.0"));
-    let _ = println!("{:?}", declaration().easy_parse("run end"));
-    let _ = println!("{:?}", program().easy_parse("run end"));
-    // assert_eq!(result, Ok(((String::from("this"), 42), "")));
 }
 

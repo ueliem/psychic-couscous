@@ -2,11 +2,12 @@ use std::rc::Rc;
 use std::convert::From;
 use std::borrow::Borrow;
 
-use super::syntax;
+use diff_enum::common_fields;
 
-pub trait Substitutable {
-    fn substitute (&self, src : &str, dest : &str) -> Self;
-}
+use super::symgen;
+use super::syntax;
+use super::values::*;
+use super::lambda::*;
 
 pub type Summ = Vec<(Act, Rc<Process>)>;
 
@@ -17,15 +18,16 @@ pub enum Act {
 }
 #[derive(Clone, Debug)] pub enum Process {
     Restriction (String, f64, Rc<Process>),
+    LetVal (String, Lambda, Rc<Process>),
     Parallel (Rc<Process>, Rc<Process>),
     Summation (Rc<Summ>),
-    Instance (String),
-    Repitition (usize, Rc<Process>),
+    Instance (String, Vec<Lambda>),
+    Repetition (usize, Rc<Process>),
     Replication (Act, Rc<Process>),
     Termination
 }
 
-impl Substitutable for Act {
+impl Substitutable<&str> for Act {
     fn substitute(&self, src : &str, dest : &str) -> Act {
         match self {
             Act::Input (c) => 
@@ -36,11 +38,26 @@ impl Substitutable for Act {
     }
 }
 
-impl Substitutable for Process {
+impl Substitutable<Lambda> for Act {
+    fn substitute(&self, _src : &str, _dest : Lambda) -> Act {
+        match self {
+            /* Act::Input (c) => 
+                Act::Input (if *c == *src {dest.to_string()} else {c.to_string()}),
+            Act::Output (c) => 
+                Act::Output (if *c == *src {dest.to_string()} else {c.to_string()}) */
+            _ => self.clone()
+        }
+    }
+}
+
+impl Substitutable<&str> for Process {
     fn substitute(&self, src : &str, dest : &str) -> Process {
         match self {
             Process::Restriction (c, r, ref p) => 
                 Process::Restriction (c.clone(), *r, Rc::new(p.substitute(src, dest))),
+            Process::LetVal (ref v, ref l, ref p) => {
+                Process::LetVal (v.to_string(), l.clone(), Rc::new(p.substitute(src, dest)))
+            },
             Process::Parallel (ref p1, ref p2) => 
                 Process::Parallel (
                     Rc::new(p1.substitute(src, dest)), 
@@ -50,15 +67,77 @@ impl Substitutable for Process {
                     Rc::new(apvec.clone().iter()
                     .map(|(a, p)| (a.substitute(src, dest), Rc::new(p.substitute(src, dest))))
                     .collect())),
-            Process::Instance (name) => {
-                Process::Instance (name.to_string())
+            Process::Instance (name, params) => {
+                Process::Instance (name.to_string(), params.clone())
             },
-            Process::Repitition (i, ref p) => 
-                Process::Repitition (*i, Rc::new(p.substitute(src, dest))),
+            Process::Repetition (i, ref p) => 
+                Process::Repetition (*i, Rc::new(p.substitute(src, dest))),
             Process::Replication (a, ref p) =>
                 Process::Replication (
                     a.substitute(src, dest),
                     Rc::new(p.substitute(src, dest))),
+            Process::Termination => Process::Termination
+        }
+    }
+}
+
+impl Substitutable<Lambda> for Process {
+    fn substitute(&self, src : &str, dest : Lambda) -> Process {
+        match self {
+            Process::Restriction (c, r, ref p) => 
+                Process::Restriction (c.clone(), *r, Rc::new(p.substitute(src, dest))),
+            Process::LetVal (ref v, ref l, ref p) => {
+                Process::LetVal (v.to_string(), l.substitute(src, dest.clone()), Rc::new(p.substitute(src, dest.clone())))
+            },
+            Process::Parallel (ref p1, ref p2) => 
+                Process::Parallel (
+                    Rc::new(p1.substitute(src, dest.clone())), 
+                    Rc::new(p2.substitute(src, dest.clone()))),
+            Process::Summation (apvec) => 
+                Process::Summation (
+                    Rc::new(apvec.clone().iter()
+                    .map(|(a, p)| (a.substitute(src, dest.clone()), Rc::new(p.substitute(src, dest.clone()))))
+                    .collect())),
+            Process::Instance (name, params) => {
+                Process::Instance (name.to_string(), params.iter().map(|x| x.substitute(src, dest.clone())).collect())
+            },
+            Process::Repetition (i, ref p) => 
+                Process::Repetition (*i, Rc::new(p.substitute(src, dest.clone()))),
+            Process::Replication (a, ref p) =>
+                Process::Replication (
+                    a.substitute(src, dest.clone()),
+                    Rc::new(p.substitute(src, dest.clone()))),
+            Process::Termination => Process::Termination
+        }
+    }
+}
+
+impl Substitutable<&Lambda> for Process {
+    fn substitute(&self, src : &str, dest : &Lambda) -> Process {
+        match self {
+            Process::Restriction (c, r, ref p) => 
+                Process::Restriction (c.clone(), *r, Rc::new(p.substitute(src, dest))),
+            Process::LetVal (ref v, ref l, ref p) => {
+                Process::LetVal (v.to_string(), l.substitute(src, dest.clone()), Rc::new(p.substitute(src, dest.clone())))
+            },
+            Process::Parallel (ref p1, ref p2) => 
+                Process::Parallel (
+                    Rc::new(p1.substitute(src, dest.clone())), 
+                    Rc::new(p2.substitute(src, dest.clone()))),
+            Process::Summation (apvec) => 
+                Process::Summation (
+                    Rc::new(apvec.clone().iter()
+                    .map(|(a, p)| (a.substitute(src, dest.clone()), Rc::new(p.substitute(src, dest.clone()))))
+                    .collect())),
+            Process::Instance (name, params) => {
+                Process::Instance (name.to_string(), params.iter().map(|x| x.substitute(src, dest.clone())).collect())
+            },
+            Process::Repetition (i, ref p) => 
+                Process::Repetition (*i, Rc::new(p.substitute(src, dest.clone()))),
+            Process::Replication (a, ref p) =>
+                Process::Replication (
+                    a.substitute(src, dest.clone()),
+                    Rc::new(p.substitute(src, dest.clone()))),
             Process::Termination => Process::Termination
         }
     }
@@ -73,9 +152,49 @@ impl From<&syntax::Act> for Act {
     }
 }
 
+fn recurse (pat : &Pattern, parent : String) -> Vec<(String, Lambda)> {
+    let mut vl = Vec::new();
+    match pat {
+        Pattern::Wildcard => panic!(),
+        Pattern::Name (n) => {
+            vl.push((n.to_string(), Lambda::Var { v : parent.to_string(), t : Type::Unit }));
+        }
+        Pattern::Tuple (pl) => {
+            for (i, p) in pl.iter().enumerate() {
+                let v = symgen::next();
+                vl.push((v.clone(), Lambda::Index { i : i as i64, e : Rc::new(Lambda::Var { v : parent.to_string(), t : Type::Unit }), t : Type::Unit }));
+                recurse(p.borrow(), v.clone());
+            }
+        }
+    }
+    vl
+}
+
+fn destruct(pat : &Pattern, expr : Lambda, base : Process) -> Process {
+    let newvar = symgen::next();
+    let vl = recurse(pat, newvar.to_string());
+    let mut current = base;
+    for (v, l) in vl.iter().rev() {
+        current = Process::LetVal (v.to_string(), l.clone(), Rc::new(current));
+    }
+    Process::LetVal (newvar, expr, Rc::new(current))
+}
+
 impl From<&syntax::Process> for Process {
     fn from(syn : &syntax::Process) -> Process {
         match *syn {
+            syntax::Process::Restriction (ref c, r, ref p) => {
+                Process::Restriction (c.to_string(), r, Rc::new(Process::from(p.borrow())))
+            },
+            syntax::Process::LetVal (ref pat, ref l, ref p) => {
+                match pat {
+                    Pattern::Wildcard => panic!(),
+                    Pattern::Name (n) => Process::LetVal (n.to_string(), l.clone(), Rc::new(Process::from(p.borrow()))),
+                    Pattern::Tuple (pl) => {
+                        destruct(&pat.clone(), l.clone(), Process::from(p.borrow()))
+                    }
+                }
+            },
             syntax::Process::Parallel (ref p) => {
                 let pborrow : &Vec<Rc<syntax::Process>> = p.borrow();
                 let mut piter : std::iter::Rev<std::slice::Iter<Rc<syntax::Process>>> = pborrow.iter().rev();
@@ -100,37 +219,31 @@ impl From<&syntax::Process> for Process {
                 });
                 return Process::Summation (Rc::new(cnew.collect()));
             },
-            syntax::Process::Instance (ref name) => {
-                Process::Instance (name.to_string())
+            syntax::Process::Instance (ref name, ref params) => {
+                Process::Instance (name.to_string(), params.clone())
             },
-            syntax::Process::Repitition (i, ref p) => {
-                Process::Repitition (i, Rc::new(Process::from(p.borrow())))
+            syntax::Process::Repetition (i, ref p) => {
+                Process::Repetition (i, Rc::new(Process::from(p.borrow())))
             },
             syntax::Process::Replication (ref a, ref p) => {
                 let pb : &syntax::Process = p.borrow();
                 let pbb : Process = Process::from(pb);
                 Process::Replication (a.into(), Rc::new(pbb))
             },
-            syntax::Process::NestedDecl (ref dl, ref p) => {
-                let dlb : &Vec<Rc<syntax::Declaration>> = dl.borrow();
-                let diter = dlb.iter().rev();
-                let mut current = Process::from((*p).borrow());
-                for d in diter {
-                    match (*d).borrow() {
-                        syntax::Declaration::NewChannel (ref c, r) => {
-                            current = Process::Restriction (c.to_string(), *r, Rc::new(current));
-                        },
-                        syntax::Declaration::Run (ref pr) => {
-                            current = Process::Parallel (Rc::new(Process::from((*pr).borrow())), Rc::new(current));
-                        },
-                        syntax::Declaration::Def (ref n, ref p) => {
-                            panic!();
-                        }
-                    }
-                }
-                return current;
-            },
             syntax::Process::Termination => Process::Termination
+        }
+    }
+}
+
+impl Process {
+    pub fn replace(&self, formals : &Pattern, vals : &Lambda) -> Process {
+        match (formals, vals) {
+            (Pattern::Wildcard, _) => self.clone(),
+            (Pattern::Name (n), l) => self.substitute(n.as_str(), l),
+            (Pattern::Tuple (ref tv), Lambda::Tuple { tup, t }) => {
+                tv.iter().zip(tup.iter()).fold(self.clone(), |p1, (pat, v)| p1.replace(pat, v))
+            },
+            (Pattern::Tuple (_), _) => panic!()
         }
     }
 }

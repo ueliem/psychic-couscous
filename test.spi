@@ -1,0 +1,11 @@
+new ionize@100.0
+new deionize@10.0
+
+let Na () = !ionize; Naplus()
+let Naplus () = ?deionize; Na()
+
+let Cl () = ?ionize; Clminus()
+let Clminus () = !deionize; Cl()
+
+run (100 of Na() | 100 of Cl())
+

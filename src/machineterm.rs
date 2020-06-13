@@ -12,15 +12,12 @@ pub enum MachineTerm {
 }
 
 impl Summ {
-    pub fn new(origin : Option<String>, s : Rc<Vec<(ast::Act, Rc<ast::Process>)>>) -> Summ {
-        Summ (origin, s.clone())
-    }
     pub fn index(&self, i : usize) -> (ast::Act, Rc<ast::Process>) {
         self.1[i].clone()
     }
     pub fn get_act_counts<'a>(&'a self) -> BTreeMap<&'a str, (usize, usize, usize)> {
         let mut counts : BTreeMap<&'a str, (usize, usize, usize)> = BTreeMap::new();
-        for (a, p) in self.1.iter() {
+        for (a, _p) in self.1.iter() {
             match a {
                 ast::Act::Input (c) => {
                     counts.entry(c).or_insert((0, 0, 0)).0 += 1;

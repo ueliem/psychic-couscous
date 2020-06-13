@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use super::values::*;
 use super::ast;
 
 #[derive(Debug)]
@@ -15,7 +16,7 @@ pub struct ChannelRecord {
 #[derive(Debug)]
 pub struct Store {
     pub chans: BTreeMap<String, ChannelRecord>,
-    pub defs: BTreeMap<String, Rc<ast::Process>>,
+    pub defs: BTreeMap<String, (Vec<Pattern>, Rc<ast::Process>)>,
     pub instance_counts: BTreeMap<String, usize>
 }
 

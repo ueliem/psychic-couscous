@@ -1,10 +1,14 @@
 use std::rc::Rc;
 
+use super::values::*;
+use super::lambda::*;
+
 #[derive(Clone, Debug)]
 pub enum Declaration {
     NewChannel (String, f64),
     Run (Rc<Process>),
-    Def (String, Rc<Process>)
+    Val (Pattern, Lambda),
+    Def (String, Vec<Pattern>, Rc<Process>)
 }
 
 pub type Summ = Vec<(Act, Rc<Process>)>;
@@ -16,13 +20,14 @@ pub enum Act {
 }
 #[derive(Clone, Debug)]
 pub enum Process {
+    Restriction (String, f64, Rc<Process>),
+    LetVal (Pattern, Lambda, Rc<Process>),
     Parallel (Rc<Vec<Rc<Process>>>),
     Action (Act, Rc<Process>),
     Choice (Rc<Summ>),
-    Instance (String),
-    Repitition (usize, Rc<Process>),
+    Instance (String, Vec<Lambda>),
+    Repetition (usize, Rc<Process>),
     Replication (Act, Rc<Process>),
-    NestedDecl (Rc<Vec<Rc<Declaration>>>, Rc<Process>),
     Termination
 }
 
